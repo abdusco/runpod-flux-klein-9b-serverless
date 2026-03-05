@@ -8,7 +8,9 @@
       "WebFetch(domain:docs.comfy.org)",
       "WebFetch(domain:www.runpod.io)",
       "WebFetch(domain:www.mikedegeofroy.com)",
-      "WebFetch(domain:docs.bfl.ml)"
+      "WebFetch(domain:docs.bfl.ml)",
+      "Bash(gh api repos/runpod-workers/worker-sdxl/contents --jq '.[].name' 2>/dev/null)",
+      "Bash(gh api repos/runpod-workers/worker-sdxl/contents/Dockerfile --jq '.content' | base64 -d)"
     ]
   }
 }
