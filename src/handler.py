@@ -23,8 +23,8 @@ HF_REPO = os.environ.get("MODEL_NAME", "black-forest-labs/FLUX.2-klein-9B")
 # ---------------------------------------------------------------------------
 # Model cache finder
 # ---------------------------------------------------------------------------
-def find_model_path(model_name: str) -> Path | None:
-    """Return local snapshot path if cached, otherwise None."""
+def find_model_path(model_name: str) -> str:
+    """Return local snapshot path if cached, otherwise the original repo ID."""
     hub_dir = Path(os.environ.get("HF_HOME", "/runpod-volume/huggingface-cache")) / "hub"
     target = f"models--{model_name.replace('/', '--')}".lower()
 
@@ -34,23 +34,21 @@ def find_model_path(model_name: str) -> Path | None:
                 snapshots_dir = entry / "snapshots"
                 revision = os.environ.get("MODEL_REVISION")
                 if revision and (snap := snapshots_dir / revision).is_dir():
-                    return snap
+                    return str(snap)
                 if snapshots_dir.is_dir():
                     snaps = list(snapshots_dir.iterdir())
                     if snaps:
-                        return snaps[0]
+                        return str(snaps[0])
 
-    return None
+    print(f"[startup] Model not in cache, will download: {model_name}")
+    return model_name
 
 
 # ---------------------------------------------------------------------------
 # Startup: load pipeline
 # ---------------------------------------------------------------------------
 def load_pipeline():
-    cached = find_model_path(HF_REPO)
-    if not cached:
-        raise RuntimeError(f"Model not found in cache: {HF_REPO}")
-    model_path = str(cached)
+    model_path = find_model_path(HF_REPO)
     print(f"[startup] Loading from: {model_path}")
     pipe = Flux2KleinPipeline.from_pretrained(
         model_path, torch_dtype=torch.bfloat16, token=os.environ.get("HF_TOKEN"),
