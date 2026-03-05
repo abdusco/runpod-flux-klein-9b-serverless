@@ -27,7 +27,7 @@ def load_pipeline():
     pipe = Flux2KleinPipeline.from_pretrained(
         HF_REPO, torch_dtype=torch.bfloat16, token=os.environ.get("HF_TOKEN"),
     )
-    pipe.enable_model_cpu_offload()
+    pipe.to("cuda")
     print("[startup] Pipeline ready.")
     return pipe
 
