@@ -16,7 +16,7 @@ import torch
 from diffusers import Flux2KleinPipeline
 from PIL import Image
 
-HF_REPO = "black-forest-labs/FLUX.2-klein-9B"
+HF_REPO = os.environ.get("MODEL_NAME", "black-forest-labs/FLUX.2-klein-9B")
 
 
 # ---------------------------------------------------------------------------
