@@ -1,7 +1,7 @@
 """
-RunPod serverless handler for Flux Klein 9B.
-Supports txt2img and img2img (via `strength` parameter).
-Model is loaded once at startup from the network volume.
+RunPod serverless handler for FLUX.2-klein-9B.
+Supports text-to-image and image-conditioned generation.
+Model is loaded once at startup via RunPod model caching (HF_HOME=/runpod-volume).
 """
 
 import base64
@@ -9,78 +9,30 @@ import io
 import math
 import os
 import random
+import time
 
 import runpod
 import torch
-from diffusers import FluxImg2ImgPipeline, FluxPipeline
+from diffusers import Flux2KleinPipeline
 from PIL import Image
 
-# ---------------------------------------------------------------------------
-# Model paths (from network volume)
-# ---------------------------------------------------------------------------
-VOLUME = os.environ.get("MODEL_VOLUME", "/runpod-volume")
-TRANSFORMER_PATH = os.path.join(
-    VOLUME, "models/diffusion_models/flux-2-klein-9b.safetensors"
-)
-TEXT_ENCODER_PATH = os.path.join(
-    VOLUME, "models/text_encoders/qwen_3_8b_fp8mixed.safetensors"
-)
-VAE_PATH = os.path.join(VOLUME, "models/vae/flux2-vae.safetensors")
-
-# HF repo to pull config/tokenizer from (no weights downloaded — we override with local files)
 HF_REPO = "black-forest-labs/FLUX.2-klein-9B"
 
 
 # ---------------------------------------------------------------------------
-# Startup: load pipelines
+# Startup: load pipeline
 # ---------------------------------------------------------------------------
-def load_pipelines():
+def load_pipeline():
     print("[startup] Loading Flux Klein 9B...")
-
-    pipe = FluxPipeline.from_pretrained(
-        HF_REPO,
-        transformer=None,  # replaced below
-        text_encoder=None,  # replaced below
-        vae=None,  # replaced below
-        torch_dtype=torch.bfloat16,
-        token=os.environ.get("HF_TOKEN"),
+    pipe = Flux2KleinPipeline.from_pretrained(
+        HF_REPO, torch_dtype=torch.bfloat16, token=os.environ.get("HF_TOKEN"),
     )
-
-    # Load individual components from local safetensors files
-    from diffusers import AutoencoderKL
-    from diffusers.models import FluxTransformer2DModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    print("[startup] Loading transformer...")
-    pipe.transformer = FluxTransformer2DModel.from_single_file(
-        TRANSFORMER_PATH, torch_dtype=torch.bfloat16
-    )
-
-    print("[startup] Loading text encoder (Qwen)...")
-    pipe.tokenizer_2 = AutoTokenizer.from_pretrained(
-        HF_REPO, subfolder="tokenizer_2", token=os.environ.get("HF_TOKEN")
-    )
-    pipe.text_encoder_2 = AutoModelForCausalLM.from_pretrained(
-        HF_REPO,
-        subfolder="text_encoder_2",
-        torch_dtype=torch.float8_e4m3fn,  # fp8 weights
-        token=os.environ.get("HF_TOKEN"),
-    )
-
-    print("[startup] Loading VAE...")
-    pipe.vae = AutoencoderKL.from_single_file(VAE_PATH, torch_dtype=torch.bfloat16)
-
-    pipe.to("cuda")
-    pipe.enable_model_cpu_offload()  # offloads unused components between steps
-
-    # Reuse all loaded components for img2img — no double loading
-    img2img_pipe = FluxImg2ImgPipeline(**pipe.components)
-
-    print("[startup] Pipelines ready.")
-    return pipe, img2img_pipe
+    pipe.enable_model_cpu_offload()
+    print("[startup] Pipeline ready.")
+    return pipe
 
 
-TXT2IMG_PIPE, IMG2IMG_PIPE = load_pipelines()
+PIPE = load_pipeline()
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +43,7 @@ def b64_to_pil(b64: str) -> Image.Image:
     return Image.open(io.BytesIO(data)).convert("RGB")
 
 
-def pil_to_b64(img: Image.Image, fmt: str = "PNG") -> str:
+def pil_to_b64(img: Image.Image, fmt: str = "JPEG") -> str:
     buf = io.BytesIO()
     img.save(buf, format=fmt)
     return base64.b64encode(buf.getvalue()).decode("utf-8")
@@ -118,19 +70,14 @@ def handler(event):
     inp = event.get("input", {})
 
     prompt = inp.get("prompt", "")
-    negative_prompt = inp.get("negative_prompt", None)
-    steps = int(inp.get("steps", 8))
+    steps = int(inp.get("steps", 4))
     seed = int(inp.get("seed", random.randint(0, 2**32 - 1)))
-    guidance = float(inp.get("guidance_scale", 3.5))
-    # true_cfg_scale > 1.0 enables true CFG with negative_prompt; defaults to 1.0 (disabled)
-    true_cfg = float(inp.get("true_cfg_scale", 1.0))
-    image_b64 = inp.get("image")  # optional — triggers img2img
-    strength = float(inp.get("strength", 0.75))  # ignored for txt2img
+    image_b64 = inp.get("image")  # optional reference image for conditioning
 
     if not prompt:
         return {"error": "prompt is required"}
 
-    # Decode input image early so its size is available for dimension defaults
+    # Decode reference image early so its size is available for dimension defaults
     input_image = b64_to_pil(image_b64) if image_b64 else None
 
     # Dimension resolution: snap all dims to multiples of 16; default to ~1.5MP aspect-aware
@@ -150,38 +97,36 @@ def handler(event):
 
     generator = torch.Generator("cuda").manual_seed(seed)
 
-    shared_kwargs = dict(
+    mode = "conditioned" if input_image is not None else "txt2img"
+    print(f"[handler] {mode} | seed={seed} steps={steps} {width}x{height}")
+
+    t0 = time.perf_counter()
+    result = PIPE(
         prompt=prompt,
-        negative_prompt=negative_prompt,
+        image=[input_image] if input_image is not None else None,
+        width=width,
+        height=height,
         num_inference_steps=steps,
-        guidance_scale=guidance,
-        true_cfg_scale=true_cfg,
         generator=generator,
     )
-
-    if input_image is not None:
-        # img2img: strength controls how much to denoise (0 = keep input, 1 = ignore input)
-        print(f"[handler] img2img | seed={seed} strength={strength} steps={steps} {width}x{height}")
-        result = IMG2IMG_PIPE(
-            image=input_image,
-            strength=strength,
-            **shared_kwargs,
-        )
-    else:
-        # txt2img
-        print(f"[handler] txt2img | seed={seed} steps={steps} {width}x{height}")
-        result = TXT2IMG_PIPE(
-            width=width,
-            height=height,
-            **shared_kwargs,
-        )
+    execution_ms = round((time.perf_counter() - t0) * 1000, 2)
 
     fmt = inp.get("output_format", "JPEG").upper()
     if fmt == "JPG":
         fmt = "JPEG"
 
+    image_format = fmt.lower()
     image_out = result.images[0]
-    return {"image": pil_to_b64(image_out, fmt=fmt), "seed": seed}
+    return {
+        "image_base64": pil_to_b64(image_out, fmt=fmt),
+        "mime_type": f"image/{image_format}",
+        "image_format": image_format,
+        "seed": seed,
+        "width": image_out.width,
+        "height": image_out.height,
+        "num_inference_steps": steps,
+        "execution_ms": execution_ms,
+    }
 
 
 if __name__ == "__main__":
