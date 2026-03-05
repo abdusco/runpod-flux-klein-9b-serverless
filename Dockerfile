@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir \
     torch==2.4.0 torchvision --index-url https://download.pytorch.org/whl/cu124
 
 RUN pip install --no-cache-dir \
-    diffusers \
+    git+https://github.com/huggingface/diffusers.git \
     transformers \
     accelerate \
     sentencepiece \
