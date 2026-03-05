@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.runpod.io)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:docs.comfy.org)",
+      "WebFetch(domain:www.runpod.io)",
+      "WebFetch(domain:www.mikedegeofroy.com)",
+      "WebFetch(domain:docs.bfl.ml)"
+    ]
+  }
+}

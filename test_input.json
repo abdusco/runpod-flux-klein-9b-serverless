@@ -1,0 +1,14 @@
+{
+  "_comment": "Remove 'image' key for txt2img. Add base64-encoded image + 'strength' for img2img.",
+  "input": {
+    "prompt": "a cinematic landscape at golden hour, photorealistic",
+    "width": 1024,
+    "height": 1024,
+    "steps": 8,
+    "seed": 42,
+    "guidance_scale": 3.5,
+
+    "image": "<base64-encoded PNG>",
+    "strength": 0.75
+  }
+}
