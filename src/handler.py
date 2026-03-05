@@ -1,7 +1,7 @@
 """
 RunPod serverless handler for FLUX.2-klein-9B.
 Supports text-to-image and image-conditioned generation.
-Model is loaded once at startup via RunPod model caching (HF_HOME=/runpod-volume).
+Model is loaded once at startup via RunPod model caching (HF_HOME=/runpod-volume/huggingface-cache).
 """
 
 import base64
@@ -20,12 +20,39 @@ HF_REPO = os.environ.get("MODEL_NAME", "black-forest-labs/FLUX.2-klein-9B")
 
 
 # ---------------------------------------------------------------------------
+# Model cache finder
+# ---------------------------------------------------------------------------
+def find_model_path(model_name: str) -> str:
+    """Return local snapshot path if cached, otherwise the original repo ID."""
+    hub_dir = os.path.join(
+        os.environ.get("HF_HOME", "/runpod-volume/huggingface-cache"), "hub"
+    )
+    target = f"models--{model_name.replace('/', '--')}".lower()
+    if os.path.isdir(hub_dir):
+        for entry in os.listdir(hub_dir):
+            if entry.lower() == target:
+                snapshots_dir = os.path.join(hub_dir, entry, "snapshots")
+                revision = os.environ.get("MODEL_REVISION")
+                if revision:
+                    snap = os.path.join(snapshots_dir, revision)
+                    if os.path.isdir(snap):
+                        return snap
+                if os.path.isdir(snapshots_dir):
+                    snaps = os.listdir(snapshots_dir)
+                    if snaps:
+                        return os.path.join(snapshots_dir, snaps[0])
+    print(f"[startup] Model not in cache, will download: {model_name}")
+    return model_name
+
+
+# ---------------------------------------------------------------------------
 # Startup: load pipeline
 # ---------------------------------------------------------------------------
 def load_pipeline():
-    print("[startup] Loading Flux Klein 9B...")
+    model_path = find_model_path(HF_REPO)
+    print(f"[startup] Loading from: {model_path}")
     pipe = Flux2KleinPipeline.from_pretrained(
-        HF_REPO, torch_dtype=torch.bfloat16, token=os.environ.get("HF_TOKEN"),
+        model_path, torch_dtype=torch.bfloat16, token=os.environ.get("HF_TOKEN"),
     )
     pipe.to("cuda")
     print("[startup] Pipeline ready.")
