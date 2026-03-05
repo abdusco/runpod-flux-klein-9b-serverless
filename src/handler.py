@@ -10,6 +10,7 @@ import math
 import os
 import random
 import time
+from pathlib import Path
 
 import runpod
 import torch
@@ -22,34 +23,34 @@ HF_REPO = os.environ.get("MODEL_NAME", "black-forest-labs/FLUX.2-klein-9B")
 # ---------------------------------------------------------------------------
 # Model cache finder
 # ---------------------------------------------------------------------------
-def find_model_path(model_name: str) -> str:
-    """Return local snapshot path if cached, otherwise the original repo ID."""
-    hub_dir = os.path.join(
-        os.environ.get("HF_HOME", "/runpod-volume/huggingface-cache"), "hub"
-    )
+def find_model_path(model_name: str) -> Path | None:
+    """Return local snapshot path if cached, otherwise None."""
+    hub_dir = Path(os.environ.get("HF_HOME", "/runpod-volume/huggingface-cache")) / "hub"
     target = f"models--{model_name.replace('/', '--')}".lower()
-    if os.path.isdir(hub_dir):
-        for entry in os.listdir(hub_dir):
-            if entry.lower() == target:
-                snapshots_dir = os.path.join(hub_dir, entry, "snapshots")
+
+    if hub_dir.is_dir():
+        for entry in hub_dir.iterdir():
+            if entry.name.lower() == target:
+                snapshots_dir = entry / "snapshots"
                 revision = os.environ.get("MODEL_REVISION")
-                if revision:
-                    snap = os.path.join(snapshots_dir, revision)
-                    if os.path.isdir(snap):
-                        return snap
-                if os.path.isdir(snapshots_dir):
-                    snaps = os.listdir(snapshots_dir)
+                if revision and (snap := snapshots_dir / revision).is_dir():
+                    return snap
+                if snapshots_dir.is_dir():
+                    snaps = list(snapshots_dir.iterdir())
                     if snaps:
-                        return os.path.join(snapshots_dir, snaps[0])
-    print(f"[startup] Model not in cache, will download: {model_name}")
-    return model_name
+                        return snaps[0]
+
+    return None
 
 
 # ---------------------------------------------------------------------------
 # Startup: load pipeline
 # ---------------------------------------------------------------------------
 def load_pipeline():
-    model_path = find_model_path(HF_REPO)
+    cached = find_model_path(HF_REPO)
+    if not cached:
+        raise RuntimeError(f"Model not found in cache: {HF_REPO}")
+    model_path = str(cached)
     print(f"[startup] Loading from: {model_path}")
     pipe = Flux2KleinPipeline.from_pretrained(
         model_path, torch_dtype=torch.bfloat16, token=os.environ.get("HF_TOKEN"),
